@@ -1,0 +1,859 @@
+import bpy
+import random
+import math
+from mathutils import Vector
+
+# =========================
+# Settings
+# =========================
+GH_OBJECT_NAME = "Rhino2"
+FRAGMENT_COLLECTION_NAME = "street_pointcloud_fragments"
+
+POSITION_SCALE = 1.0
+FRAGMENT_SCALE_MIN = 0.6
+FRAGMENT_SCALE_MAX = 1.6
+HEIGHT_RANDOM = 0.0
+
+# =========================
+# Get GH coordinate object
+# =========================
+gh_obj = bpy.data.objects.get(GH_OBJECT_NAME)
+if gh_obj is None:
+    raise Exception(f"Cannot find GH object named {GH_OBJECT_NAME}")
+
+if gh_obj.type != "MESH":
+    raise Exception(f"{GH_OBJECT_NAME} is not a mesh object")
+
+# collect world-space vertices from GH object
+coords = []
+for v in gh_obj.data.vertices:
+    p = gh_obj.matrix_world @ v.co
+    coords.append(Vector((p.x * POSITION_SCALE, p.y * POSITION_SCALE, p.z * POSITION_SCALE)))
+
+# remove duplicated / near duplicated coordinates
+clean_coords = []
+seen = set()
+for p in coords:
+    key = (round(p.x, 2), round(p.y, 2), round(p.z, 2))
+    if key not in seen:
+        seen.add(key)
+        clean_coords.append(p)
+
+coords = clean_coords
+print("GH coordinate count:", len(coords))
+
+# =========================
+# Get pointcloud fragments
+# =========================
+col = bpy.data.collections.get(FRAGMENT_COLLECTION_NAME)
+if col is None:
+    raise Exception(f"Cannot find collection {FRAGMENT_COLLECTION_NAME}")
+
+fragments = [obj for obj in col.objects if obj.name.startswith("pc_fragment_")]
+print("Fragment count:", len(fragments))
+
+if len(coords) == 0 or len(fragments) == 0:
+    raise Exception("No coordinates or no fragments found.")
+
+# =========================
+# Reposition fragments
+# =========================
+random.shuffle(coords)
+
+for i, obj in enumerate(fragments):
+    p = coords[i % len(coords)]
+
+    obj.location = (
+        p.x,
+        p.y,
+        p.z + random.uniform(0, HEIGHT_RANDOM)
+    )
+
+    # rotate to face courtyard center
+    direction = Vector((0, 0, 0)) - Vector((p.x, p.y, 0))
+    angle = math.atan2(direction.y, direction.x)
+    obj.rotation_euler = (
+        random.uniform(-0.08, 0.08),
+        random.uniform(-0.08, 0.08),
+        angle + random.uniform(-0.35, 0.35)
+    )
+
+    s = random.uniform(FRAGMENT_SCALE_MIN, FRAGMENT_SCALE_MAX)
+    obj.scale = (s, s, s)
+
+# hide original street scan object if selected/source object exists
+for obj in bpy.context.scene.objects:
+    if obj.name == "Material_25_002":
+        obj.hide_viewport = True
+        obj.hide_render = True
+
+print("DONE: pointcloud fragments placed onto GH courtyard coordinates.")import bpy
+import random
+
+mat = bpy.data.materials.new("Readable_PointCloud_Material")
+mat.diffuse_color = (0.85, 0.95, 1.0, 1)
+
+for obj in bpy.context.scene.objects:
+    if obj.name.startswith("pc_fragment_"):
+        obj.data.materials.clear()
+        obj.data.materials.append(mat)
+        obj.show_in_front = True
+
+        # 让点在视图里更明显
+        obj.display_type = 'WIRE'
+        obj.color = (0.85, 0.95, 1.0, 1)
+
+print("Point cloud material updated.")import bpy
+import math
+import random
+from mathutils import Vector
+
+# =========================
+# Settings
+# =========================
+GH_OBJECT_NAME = "Rhino2"
+SOURCE_COLLECTION = "street_pointcloud_fragments"
+OUTPUT_COLLECTION = "flowing_sphere_pointcloud"
+
+FRAME_START = 1
+FRAME_END = 1440
+KEY_STEP = 120
+
+DOT_RADIUS = 0.045
+MAX_POINTS_PER_FRAGMENT = 450
+
+FLOW_SCALE_MIN = 0.65
+FLOW_SCALE_MAX = 1.25
+
+RING_Z_OFFSET = 0.2
+FLOW_WAVE_HEIGHT = 1.2
+
+# =========================
+# Clear old output
+# =========================
+old = bpy.data.collections.get(OUTPUT_COLLECTION)
+if old:
+    for obj in list(old.objects):
+        bpy.data.objects.remove(obj, do_unlink=True)
+else:
+    old = bpy.data.collections.new(OUTPUT_COLLECTION)
+    bpy.context.scene.collection.children.link(old)
+
+# =========================
+# Materials
+# =========================
+def make_mat(name, color, emission=False):
+    mat = bpy.data.materials.new(name)
+    mat.diffuse_color = color
+    mat.use_nodes = True
+    bsdf = mat.node_tree.nodes.get("Principled BSDF")
+    if bsdf:
+        bsdf.inputs["Base Color"].default_value = color
+        bsdf.inputs["Alpha"].default_value = color[3]
+        if "Emission Strength" in bsdf.inputs:
+            bsdf.inputs["Emission Strength"].default_value = 0.6 if emission else 0
+            bsdf.inputs["Emission Color"].default_value = color
+    mat.blend_method = "BLEND"
+    return mat
+
+mat_flow = make_mat("Flowing_Cyan_Point_Material", (0.35, 0.9, 1.0, 0.85), True)
+mat_warm = make_mat("Flowing_Warm_Point_Material", (1.0, 0.55, 0.25, 0.8), True)
+
+# =========================
+# Get GH ring coordinates
+# =========================
+gh = bpy.data.objects.get(GH_OBJECT_NAME)
+if gh is None:
+    raise Exception(f"Cannot find {GH_OBJECT_NAME}")
+
+coords = []
+for v in gh.data.vertices:
+    p = gh.matrix_world @ v.co
+    coords.append(Vector((p.x, p.y, p.z + RING_Z_OFFSET)))
+
+# remove duplicates
+clean = []
+seen = set()
+for p in coords:
+    key = (round(p.x, 2), round(p.y, 2), round(p.z, 2))
+    if key not in seen:
+        seen.add(key)
+        clean.append(p)
+
+coords = clean
+
+# sort by angle to form circular path
+center = sum(coords, Vector()) / len(coords)
+coords.sort(key=lambda p: math.atan2(p.y - center.y, p.x - center.x))
+
+print("Ring coordinate count:", len(coords))
+
+# =========================
+# Get source fragments
+# =========================
+src_col = bpy.data.collections.get(SOURCE_COLLECTION)
+if src_col is None:
+    raise Exception(f"Cannot find collection {SOURCE_COLLECTION}")
+
+fragments = [o for o in src_col.objects if o.name.startswith("pc_fragment_")]
+print("Source fragments:", len(fragments))
+
+# =========================
+# Low-poly sphere as octahedron
+# =========================
+def add_octahedron(verts, faces, center, r):
+    base = len(verts)
+    x, y, z = center
+    verts.extend([
+        (x, y, z + r),
+        (x, y, z - r),
+        (x + r, y, z),
+        (x - r, y, z),
+        (x, y + r, z),
+        (x, y - r, z),
+    ])
+    faces.extend([
+        (base+0, base+2, base+4),
+        (base+0, base+4, base+3),
+        (base+0, base+3, base+5),
+        (base+0, base+5, base+2),
+        (base+1, base+4, base+2),
+        (base+1, base+3, base+4),
+        (base+1, base+5, base+3),
+        (base+1, base+2, base+5),
+    ])
+
+def create_sphere_cloud_from_fragment(fragment, index):
+    pts = [v.co.copy() for v in fragment.data.vertices]
+
+    if len(pts) > MAX_POINTS_PER_FRAGMENT:
+        pts = random.sample(pts, MAX_POINTS_PER_FRAGMENT)
+
+    verts = []
+    faces = []
+
+    for p in pts:
+        rr = DOT_RADIUS * random.uniform(0.65, 1.35)
+        add_octahedron(verts, faces, (p.x, p.y, p.z), rr)
+
+    mesh = bpy.data.meshes.new(f"flow_cloud_mesh_{index:03d}")
+    mesh.from_pydata(verts, [], faces)
+    mesh.update()
+
+    obj = bpy.data.objects.new(f"flow_cloud_{index:03d}", mesh)
+    old.objects.link(obj)
+
+    obj.data.materials.append(mat_flow if index % 4 else mat_warm)
+
+    return obj
+
+# =========================
+# Create renderable sphere clouds
+# =========================
+flow_objs = []
+
+for i, frag in enumerate(fragments):
+    obj = create_sphere_cloud_from_fragment(frag, i)
+    flow_objs.append(obj)
+
+    # hide original black vertex fragment
+    frag.hide_viewport = True
+    frag.hide_render = True
+
+print("Created renderable flow clouds:", len(flow_objs))
+
+# =========================
+# Animate flowing around ring
+# =========================
+bpy.context.scene.frame_start = FRAME_START
+bpy.context.scene.frame_end = FRAME_END
+bpy.context.scene.render.fps = 24
+
+path_len = len(coords)
+
+for i, obj in enumerate(flow_objs):
+    start_id = int((i / max(1, len(flow_objs))) * path_len)
+    speed_offset = random.randint(8, 22)
+    scale = random.uniform(FLOW_SCALE_MIN, FLOW_SCALE_MAX)
+    obj.scale = (scale, scale, scale)
+
+    for frame in range(FRAME_START, FRAME_END + 1, KEY_STEP):
+        t = (frame - FRAME_START) / (FRAME_END - FRAME_START)
+
+        # each object moves forward around ring
+        idx = int((start_id + t * path_len + i * speed_offset) % path_len)
+        p = coords[idx]
+
+        wave = math.sin(t * math.tau * 3 + i * 0.45) * FLOW_WAVE_HEIGHT
+
+        obj.location = (
+            p.x,
+            p.y,
+            p.z + wave
+        )
+
+        direction = center - Vector((p.x, p.y, 0))
+        angle = math.atan2(direction.y, direction.x)
+
+        obj.rotation_euler = (
+            random.uniform(-0.15, 0.15),
+            random.uniform(-0.15, 0.15),
+            angle + math.sin(t * math.tau + i) * 0.5
+        )
+
+        obj.keyframe_insert(data_path="location", frame=frame)
+        obj.keyframe_insert(data_path="rotation_euler", frame=frame)
+        obj.keyframe_insert(data_path="scale", frame=frame)
+
+# make animation linear
+for obj in flow_objs:
+    if obj.animation_data and obj.animation_data.action:
+        action = obj.animation_data.action
+        if hasattr(action, "fcurves"):
+            for fc in action.fcurves:
+                for kp in fc.keyframe_points:
+                    kp.interpolation = "LINEAR"
+
+# =========================
+# Hide original scan if needed
+# =========================
+scan = bpy.data.objects.get("Material_25_002")
+if scan:
+    scan.hide_viewport = True
+    scan.hide_render = True
+
+print("DONE: sphere point-cloud flow animation created.")import bpy
+
+# =========================
+# Settings
+# =========================
+SOURCE_OBJECT_NAME = "Rhino2"
+FRAME_OBJECT_NAME = "Rhino2_wireframe_frame"
+
+FRAME_THICKNESS = 0.08   # 框架粗细，可调：0.04-0.15
+FRAME_RESOLUTION = 3     # 圆滑度，越高越圆
+HIDE_ORIGINAL = True
+
+# =========================
+# Get source
+# =========================
+src = bpy.data.objects.get(SOURCE_OBJECT_NAME)
+
+if src is None:
+    raise Exception(f"Cannot find object: {SOURCE_OBJECT_NAME}")
+
+if src.type != "MESH":
+    raise Exception(f"{SOURCE_OBJECT_NAME} is not a mesh.")
+
+# 删除旧框架
+old = bpy.data.objects.get(FRAME_OBJECT_NAME)
+if old:
+    bpy.data.objects.remove(old, do_unlink=True)
+
+# =========================
+# Duplicate mesh
+# =========================
+mesh = src.data.copy()
+frame_obj = bpy.data.objects.new(FRAME_OBJECT_NAME, mesh)
+bpy.context.collection.objects.link(frame_obj)
+
+frame_obj.matrix_world = src.matrix_world.copy()
+
+# =========================
+# Remove all faces, keep edges
+# =========================
+import bmesh
+
+bm = bmesh.new()
+bm.from_mesh(mesh)
+
+# 删除所有面，只保留边
+faces = list(bm.faces)
+bmesh.ops.delete(bm, geom=faces, context="FACES_ONLY")
+
+bm.to_mesh(mesh)
+bm.free()
+mesh.update()
+
+# =========================
+# Convert edges to curve with thickness
+# =========================
+bpy.context.view_layer.objects.active = frame_obj
+frame_obj.select_set(True)
+
+bpy.ops.object.convert(target="CURVE")
+
+curve_obj = bpy.context.object
+curve_obj.name = FRAME_OBJECT_NAME
+
+curve_obj.data.dimensions = "3D"
+curve_obj.data.resolution_u = FRAME_RESOLUTION
+curve_obj.data.bevel_depth = FRAME_THICKNESS
+curve_obj.data.bevel_resolution = FRAME_RESOLUTION
+curve_obj.data.fill_mode = "FULL"
+curve_obj.data.use_fill_caps = True
+
+# =========================
+# Material
+# =========================
+mat = bpy.data.materials.new("Rhino2_Frame_Dark_Metal")
+mat.diffuse_color = (0.08, 0.08, 0.08, 1)
+
+curve_obj.data.materials.append(mat)
+
+# =========================
+# Hide original
+# =========================
+if HIDE_ORIGINAL:
+    src.hide_viewport = True
+    src.hide_render = True
+
+print("DONE: Rhino2 converted into solid rectangular frame.")
+print("Frame thickness:", FRAME_THICKNESS)import bpy
+import math
+import random
+
+# =========================
+# Settings
+# =========================
+FRAME_OBJECT_NAME = "Rhino2_wireframe_frame"
+FLOW_COLLECTION_NAME = "flowing_sphere_pointcloud"
+
+FRAME_START = 1
+FRAME_END = 720          # 原来 1440 太慢，这里改成 720
+KEY_STEP = 60            # 关键帧更密，运动更顺
+
+FRAME_WAVE_HEIGHT = 1.8  # 方框上下起伏幅度
+FRAME_WAVE_SPEED = 4.0   # 方框波动速度
+
+POINT_FLOW_SPEED = 2.8   # 点云流动速度，越大越快
+POINT_WAVE_HEIGHT = 1.5
+
+# =========================
+# Materials
+# =========================
+def make_emission_mat(name, base_color, emission_strength=0.6, alpha=1.0):
+    mat = bpy.data.materials.new(name)
+    mat.diffuse_color = base_color
+    mat.use_nodes = True
+
+    bsdf = mat.node_tree.nodes.get("Principled BSDF")
+    if bsdf:
+        bsdf.inputs["Base Color"].default_value = base_color
+        bsdf.inputs["Alpha"].default_value = alpha
+        if "Emission Strength" in bsdf.inputs:
+            bsdf.inputs["Emission Strength"].default_value = emission_strength
+            bsdf.inputs["Emission Color"].default_value = base_color
+
+    mat.blend_method = "BLEND"
+    mat.use_screen_refraction = True
+    return mat
+
+mat_frame = make_emission_mat(
+    "Dark_Glass_Wireframe_Blue",
+    (0.05, 0.18, 0.26, 0.85),
+    emission_strength=0.25,
+    alpha=0.85
+)
+
+mat_point_cyan = make_emission_mat(
+    "Liquid_Point_Cyan",
+    (0.2, 0.9, 1.0, 0.9),
+    emission_strength=1.2,
+    alpha=0.9
+)
+
+mat_point_orange = make_emission_mat(
+    "Liquid_Point_Amber",
+    (1.0, 0.45, 0.12, 0.85),
+    emission_strength=0.9,
+    alpha=0.85
+)
+
+# =========================
+# Animate frame object
+# =========================
+frame_obj = bpy.data.objects.get(FRAME_OBJECT_NAME)
+
+if frame_obj:
+    frame_obj.data.materials.clear()
+    frame_obj.data.materials.append(mat_frame)
+
+    frame_obj.animation_data_clear()
+
+    base_loc = frame_obj.location.copy()
+    base_rot = frame_obj.rotation_euler.copy()
+
+    for frame in range(FRAME_START, FRAME_END + 1, KEY_STEP):
+        t = (frame - FRAME_START) / (FRAME_END - FRAME_START)
+
+        z_wave = math.sin(t * math.tau * FRAME_WAVE_SPEED) * FRAME_WAVE_HEIGHT
+        rot_wave = math.sin(t * math.tau * 2.0) * 0.08
+
+        frame_obj.location = (
+            base_loc.x,
+            base_loc.y,
+            base_loc.z + z_wave
+        )
+
+        frame_obj.rotation_euler = (
+            base_rot.x + rot_wave,
+            base_rot.y + math.cos(t * math.tau * 2.0) * 0.06,
+            base_rot.z
+        )
+
+        frame_obj.keyframe_insert(data_path="location", frame=frame)
+        frame_obj.keyframe_insert(data_path="rotation_euler", frame=frame)
+
+    print("Frame animation added.")
+else:
+    print("Warning: frame object not found:", FRAME_OBJECT_NAME)
+
+# =========================
+# Speed up point-cloud flow animation
+# =========================
+flow_col = bpy.data.collections.get(FLOW_COLLECTION_NAME)
+
+if flow_col:
+    flow_objs = [o for o in flow_col.objects if o.name.startswith("flow_cloud_")]
+
+    for i, obj in enumerate(flow_objs):
+        obj.animation_data_clear()
+
+        obj.data.materials.clear()
+        obj.data.materials.append(mat_point_cyan if i % 5 else mat_point_orange)
+
+        base_scale = random.uniform(0.85, 1.35)
+        obj.scale = (base_scale, base_scale, base_scale)
+
+        # 用当前对象位置当作半径基础
+        radius = math.sqrt(obj.location.x ** 2 + obj.location.y ** 2)
+        if radius < 1:
+            radius = 24 + random.uniform(-4, 4)
+
+        start_angle = math.atan2(obj.location.y, obj.location.x)
+
+        for frame in range(FRAME_START, FRAME_END + 1, KEY_STEP):
+            t = (frame - FRAME_START) / (FRAME_END - FRAME_START)
+
+            angle = start_angle + t * math.tau * POINT_FLOW_SPEED
+            wave = math.sin(t * math.tau * 5 + i * 0.35) * POINT_WAVE_HEIGHT
+
+            obj.location = (
+                math.cos(angle) * radius,
+                math.sin(angle) * radius,
+                wave + 0.4
+            )
+
+            obj.rotation_euler = (
+                math.sin(t * math.tau * 2 + i) * 0.35,
+                math.cos(t * math.tau * 2 + i) * 0.35,
+                angle
+            )
+
+            obj.keyframe_insert(data_path="location", frame=frame)
+            obj.keyframe_insert(data_path="rotation_euler", frame=frame)
+            obj.keyframe_insert(data_path="scale", frame=frame)
+
+    print("Point-cloud animation sped up and materials updated.")
+else:
+    print("Warning: flow collection not found:", FLOW_COLLECTION_NAME)
+
+# =========================
+# Linear interpolation
+# =========================
+for obj in bpy.context.scene.objects:
+    if obj.animation_data and obj.animation_data.action:
+        action = obj.animation_data.action
+        if hasattr(action, "fcurves"):
+            for fc in action.fcurves:
+                for kp in fc.keyframe_points:
+                    kp.interpolation = "SINE"
+
+# =========================
+# Scene render settings
+# =========================
+bpy.context.scene.frame_start = FRAME_START
+bpy.context.scene.frame_end = FRAME_END
+bpy.context.scene.render.fps = 24
+
+# better viewport/render mood
+bpy.context.scene.world.color = (0.005, 0.006, 0.008)
+
+print("DONE: frame wave animation + faster liquid point-cloud animation.")import bpy
+import math
+
+# delete old custom lights
+for obj in list(bpy.context.scene.objects):
+    if obj.name.startswith("MISREAD_LIGHT_"):
+        bpy.data.objects.remove(obj, do_unlink=True)
+
+# world background
+bpy.context.scene.world.color = (0.005, 0.007, 0.01)
+
+# render settings
+bpy.context.scene.render.engine = "BLENDER_EEVEE_NEXT" if "BLENDER_EEVEE_NEXT" in [i.identifier for i in bpy.types.RenderSettings.bl_rna.properties["engine"].enum_items] else "BLENDER_EEVEE"
+bpy.context.scene.eevee.taa_render_samples = 96
+bpy.context.scene.eevee.taa_samples = 32
+
+# helper
+def add_light(name, type_, loc, energy, color, size=5):
+    bpy.ops.object.light_add(type=type_, location=loc)
+    light = bpy.context.object
+    light.name = name
+    light.data.energy = energy
+    light.data.color = color
+    if hasattr(light.data, "size"):
+        light.data.size = size
+    if hasattr(light.data, "shadow_soft_size"):
+        light.data.shadow_soft_size = size
+    return light
+
+# main soft overhead light
+add_light(
+    "MISREAD_LIGHT_soft_top",
+    "AREA",
+    (0, 0, 18),
+    700,
+    (0.55, 0.75, 1.0),
+    size=22
+)
+
+# central glow, like machine-reading core
+add_light(
+    "MISREAD_LIGHT_core_cyan",
+    "POINT",
+    (0, 0, 4),
+    450,
+    (0.2, 0.9, 1.0),
+    size=8
+)
+
+# warm contrast from one side
+add_light(
+    "MISREAD_LIGHT_warm_side",
+    "AREA",
+    (-18, -14, 8),
+    450,
+    (1.0, 0.45, 0.18),
+    size=14
+)
+
+# cold rim light from opposite side
+add_light(
+    "MISREAD_LIGHT_blue_rim",
+    "AREA",
+    (18, 16, 10),
+    600,
+    (0.25, 0.55, 1.0),
+    size=16
+)
+
+# small ring lights around courtyard
+for i in range(8):
+    a = i / 8 * math.tau
+    r = 22
+    x = math.cos(a) * r
+    y = math.sin(a) * r
+    z = 4 + (i % 2) * 2
+    color = (0.1, 0.85, 1.0) if i % 2 == 0 else (1.0, 0.35, 0.12)
+    add_light(
+        f"MISREAD_LIGHT_ring_{i:02d}",
+        "POINT",
+        (x, y, z),
+        90,
+        color,
+        size=5
+    )
+
+# add a subtle dark floor if absent
+if not bpy.data.objects.get("MISREAD_dark_floor"):
+    bpy.ops.mesh.primitive_cylinder_add(vertices=128, radius=30, depth=0.08, location=(0,0,-0.08))
+    floor = bpy.context.object
+    floor.name = "MISREAD_dark_floor"
+    mat = bpy.data.materials.new("MISREAD_matte_black_floor")
+    mat.diffuse_color = (0.01, 0.012, 0.014, 1)
+    floor.data.materials.append(mat)
+
+# viewport color management
+bpy.context.scene.view_settings.view_transform = "Filmic"
+bpy.context.scene.view_settings.look = "Medium High Contrast"
+bpy.context.scene.view_settings.exposure = -0.2
+bpy.context.scene.view_settings.gamma = 1.0
+
+print("DONE: lighting setup created.")import bpy
+import math
+from mathutils import Vector
+
+# =========================
+# Camera setup
+# =========================
+# delete old target if exists
+old_target = bpy.data.objects.get("MISREAD_camera_target")
+if old_target:
+    bpy.data.objects.remove(old_target, do_unlink=True)
+
+# create target at courtyard center
+bpy.ops.object.empty_add(type="PLAIN_AXES", location=(0, 0, 2.8))
+target = bpy.context.object
+target.name = "MISREAD_camera_target"
+
+# create / reuse camera
+cam = bpy.data.objects.get("MISREAD_main_camera")
+if cam is None:
+    bpy.ops.object.camera_add()
+    cam = bpy.context.object
+    cam.name = "MISREAD_main_camera"
+
+# camera position: 斜上方俯视，适合看环形庭院
+cam.location = (24, -34, 20)
+cam.rotation_euler = (math.radians(62), 0, math.radians(36))
+
+# make camera look at target
+direction = target.location - cam.location
+cam.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
+
+cam.data.lens = 28
+cam.data.sensor_width = 32
+cam.data.dof.use_dof = True
+cam.data.dof.focus_object = target
+cam.data.dof.aperture_fstop = 5.6
+
+bpy.context.scene.camera = cam
+
+# =========================
+# Render settings
+# =========================
+scene = bpy.context.scene
+
+# EEVEE
+try:
+    scene.render.engine = "BLENDER_EEVEE_NEXT"
+except:
+    scene.render.engine = "BLENDER_EEVEE"
+
+# resolution
+scene.render.resolution_x = 1920
+scene.render.resolution_y = 1080
+scene.render.fps = 24
+
+# color management
+scene.view_settings.view_transform = "Filmic"
+scene.view_settings.look = "Medium High Contrast"
+scene.view_settings.exposure = -0.15
+scene.view_settings.gamma = 1.0
+
+# world
+scene.world.color = (0.004, 0.006, 0.01)
+
+# =========================
+# Eevee glow / bloom / ambient
+# =========================
+if hasattr(scene, "eevee"):
+    eevee = scene.eevee
+
+    # bloom / glow
+    if hasattr(eevee, "use_bloom"):
+        eevee.use_bloom = True
+        eevee.bloom_threshold = 0.25
+        eevee.bloom_intensity = 0.18
+        eevee.bloom_radius = 6.5
+        eevee.bloom_color = (0.55, 0.85, 1.0)
+
+    # ambient occlusion
+    if hasattr(eevee, "use_gtao"):
+        eevee.use_gtao = True
+        eevee.gtao_distance = 4
+        eevee.gtao_factor = 1.5
+
+    # shadows / samples
+    if hasattr(eevee, "taa_render_samples"):
+        eevee.taa_render_samples = 128
+    if hasattr(eevee, "taa_samples"):
+        eevee.taa_samples = 64
+
+# =========================
+# Add subtle volumetric fog cube
+# =========================
+old_fog = bpy.data.objects.get("MISREAD_soft_fog_volume")
+if old_fog:
+    bpy.data.objects.remove(old_fog, do_unlink=True)
+
+bpy.ops.mesh.primitive_cube_add(size=70, location=(0, 0, 8))
+fog = bpy.context.object
+fog.name = "MISREAD_soft_fog_volume"
+fog.display_type = "WIRE"
+
+fog_mat = bpy.data.materials.new("MISREAD_soft_blue_fog")
+fog_mat.use_nodes = True
+nodes = fog_mat.node_tree.nodes
+for n in nodes:
+    nodes.remove(n)
+
+output = nodes.new("ShaderNodeOutputMaterial")
+volume = nodes.new("ShaderNodeVolumePrincipled")
+volume.inputs["Color"].default_value = (0.12, 0.28, 0.45, 1)
+volume.inputs["Density"].default_value = 0.015
+
+fog_mat.node_tree.links.new(volume.outputs["Volume"], output.inputs["Volume"])
+fog.data.materials.append(fog_mat)
+
+# =========================
+# Add camera marker path preview curve
+# =========================
+print("DONE: camera + glow + fog render settings created.")
+print("Camera: MISREAD_main_camera")import bpy
+
+# 切换到 Cycles
+bpy.context.scene.render.engine = "CYCLES"
+bpy.context.scene.cycles.samples = 128
+bpy.context.scene.cycles.use_denoising = True
+
+# 创建自发光材质
+def make_emission_material(name, color, strength):
+    mat = bpy.data.materials.new(name)
+    mat.use_nodes = True
+
+    nodes = mat.node_tree.nodes
+    nodes.clear()
+
+    emission = nodes.new("ShaderNodeEmission")
+    emission.inputs["Color"].default_value = color
+    emission.inputs["Strength"].default_value = strength
+
+    output = nodes.new("ShaderNodeOutputMaterial")
+    mat.node_tree.links.new(emission.outputs["Emission"], output.inputs["Surface"])
+
+    return mat
+
+mat_cyan = make_emission_material(
+    "POINT_EMISSION_CYAN",
+    (0.15, 0.9, 1.0, 1),
+    6.0
+)
+
+mat_orange = make_emission_material(
+    "POINT_EMISSION_ORANGE",
+    (1.0, 0.45, 0.1, 1),
+    4.5
+)
+
+mat_blue = make_emission_material(
+    "POINT_EMISSION_BLUE",
+    (0.2, 0.45, 1.0, 1),
+    5.0
+)
+
+# 给所有流动点云赋自发光材质
+for i, obj in enumerate(bpy.context.scene.objects):
+    if obj.name.startswith("flow_cloud_"):
+        obj.data.materials.clear()
+
+        if i % 7 == 0:
+            obj.data.materials.append(mat_orange)
+        elif i % 3 == 0:
+            obj.data.materials.append(mat_blue)
+        else:
+            obj.data.materials.append(mat_cyan)
+
+print("DONE: Flow particles now use Cycles emission materials.")

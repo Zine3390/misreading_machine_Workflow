@@ -1,0 +1,85 @@
+import bpy
+import random
+from mathutils import Vector
+from collections import defaultdict
+
+# =========================
+# Settings
+# =========================
+CELL_SIZE = 8.0          # 越大碎片越少，越小碎片越多
+MAX_FRAGMENTS = 80       # 最多生成多少个点云碎片
+POINTS_PER_FRAGMENT = 350 # 每个碎片最多多少点
+SAMPLE_STEP = 8          # 每隔几个顶点采样一次，越大越轻
+
+POINT_SIZE = 0.06
+
+source = bpy.context.object
+
+if source is None or source.type != "MESH":
+    raise Exception("Please select the street scan mesh first.")
+
+# 删除旧碎片
+for obj in list(bpy.context.scene.objects):
+    if obj.name.startswith("pc_fragment_"):
+        bpy.data.objects.remove(obj, do_unlink=True)
+
+# 创建 collection
+old_col = bpy.data.collections.get("street_pointcloud_fragments")
+if old_col:
+    for obj in list(old_col.objects):
+        bpy.data.objects.remove(obj, do_unlink=True)
+else:
+    old_col = bpy.data.collections.new("street_pointcloud_fragments")
+    bpy.context.scene.collection.children.link(old_col)
+
+mesh = source.data
+world = source.matrix_world
+
+groups = defaultdict(list)
+
+# 只采样顶点，不复制面
+verts = mesh.vertices[::SAMPLE_STEP]
+
+for v in verts:
+    p = world @ v.co
+    key = (
+        int(p.x // CELL_SIZE),
+        int(p.y // CELL_SIZE),
+        int(p.z // CELL_SIZE)
+    )
+    groups[key].append(p)
+
+# 选点最多的几个分组
+items = sorted(groups.items(), key=lambda kv: len(kv[1]), reverse=True)
+items = items[:MAX_FRAGMENTS]
+
+# 点云材质
+mat = bpy.data.materials.new("PointCloud_White")
+mat.diffuse_color = (0.9, 0.9, 0.85, 1)
+
+created = 0
+
+for i, (key, pts) in enumerate(items):
+    if len(pts) < 20:
+        continue
+
+    pts = random.sample(pts, min(len(pts), POINTS_PER_FRAGMENT))
+
+    # 让每个碎片以自身中心为局部原点，后面更好移动
+    center = sum(pts, Vector()) / len(pts)
+    local_pts = [p - center for p in pts]
+
+    mesh_pc = bpy.data.meshes.new(f"pc_fragment_mesh_{i:03d}")
+    mesh_pc.from_pydata([tuple(p) for p in local_pts], [], [])
+    mesh_pc.update()
+
+    obj = bpy.data.objects.new(f"pc_fragment_{i:03d}", mesh_pc)
+    obj.location = center
+    obj.show_name = False
+    obj.data.materials.append(mat)
+
+    old_col.objects.link(obj)
+    created += 1
+
+print(f"DONE: created {created} lightweight point-cloud fragments.")
+print("Collection: street_pointcloud_fragments")

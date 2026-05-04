@@ -1,0 +1,172 @@
+import bpy
+import math
+import random
+
+# =========================
+# Settings
+# =========================
+FRAME_OBJECT_NAME = "Rhino2_wireframe_frame"
+FLOW_COLLECTION_NAME = "flowing_sphere_pointcloud"
+
+FRAME_START = 1
+FRAME_END = 720          # 原来 1440 太慢，这里改成 720
+KEY_STEP = 60            # 关键帧更密，运动更顺
+
+FRAME_WAVE_HEIGHT = 1.8  # 方框上下起伏幅度
+FRAME_WAVE_SPEED = 4.0   # 方框波动速度
+
+POINT_FLOW_SPEED = 2.8   # 点云流动速度，越大越快
+POINT_WAVE_HEIGHT = 1.5
+
+# =========================
+# Materials
+# =========================
+def make_emission_mat(name, base_color, emission_strength=0.6, alpha=1.0):
+    mat = bpy.data.materials.new(name)
+    mat.diffuse_color = base_color
+    mat.use_nodes = True
+
+    bsdf = mat.node_tree.nodes.get("Principled BSDF")
+    if bsdf:
+        bsdf.inputs["Base Color"].default_value = base_color
+        bsdf.inputs["Alpha"].default_value = alpha
+        if "Emission Strength" in bsdf.inputs:
+            bsdf.inputs["Emission Strength"].default_value = emission_strength
+            bsdf.inputs["Emission Color"].default_value = base_color
+
+    mat.blend_method = "BLEND"
+    mat.use_screen_refraction = True
+    return mat
+
+mat_frame = make_emission_mat(
+    "Dark_Glass_Wireframe_Blue",
+    (0.05, 0.18, 0.26, 0.85),
+    emission_strength=0.25,
+    alpha=0.85
+)
+
+mat_point_cyan = make_emission_mat(
+    "Liquid_Point_Cyan",
+    (0.2, 0.9, 1.0, 0.9),
+    emission_strength=1.2,
+    alpha=0.9
+)
+
+mat_point_orange = make_emission_mat(
+    "Liquid_Point_Amber",
+    (1.0, 0.45, 0.12, 0.85),
+    emission_strength=0.9,
+    alpha=0.85
+)
+
+# =========================
+# Animate frame object
+# =========================
+frame_obj = bpy.data.objects.get(FRAME_OBJECT_NAME)
+
+if frame_obj:
+    frame_obj.data.materials.clear()
+    frame_obj.data.materials.append(mat_frame)
+
+    frame_obj.animation_data_clear()
+
+    base_loc = frame_obj.location.copy()
+    base_rot = frame_obj.rotation_euler.copy()
+
+    for frame in range(FRAME_START, FRAME_END + 1, KEY_STEP):
+        t = (frame - FRAME_START) / (FRAME_END - FRAME_START)
+
+        z_wave = math.sin(t * math.tau * FRAME_WAVE_SPEED) * FRAME_WAVE_HEIGHT
+        rot_wave = math.sin(t * math.tau * 2.0) * 0.08
+
+        frame_obj.location = (
+            base_loc.x,
+            base_loc.y,
+            base_loc.z + z_wave
+        )
+
+        frame_obj.rotation_euler = (
+            base_rot.x + rot_wave,
+            base_rot.y + math.cos(t * math.tau * 2.0) * 0.06,
+            base_rot.z
+        )
+
+        frame_obj.keyframe_insert(data_path="location", frame=frame)
+        frame_obj.keyframe_insert(data_path="rotation_euler", frame=frame)
+
+    print("Frame animation added.")
+else:
+    print("Warning: frame object not found:", FRAME_OBJECT_NAME)
+
+# =========================
+# Speed up point-cloud flow animation
+# =========================
+flow_col = bpy.data.collections.get(FLOW_COLLECTION_NAME)
+
+if flow_col:
+    flow_objs = [o for o in flow_col.objects if o.name.startswith("flow_cloud_")]
+
+    for i, obj in enumerate(flow_objs):
+        obj.animation_data_clear()
+
+        obj.data.materials.clear()
+        obj.data.materials.append(mat_point_cyan if i % 5 else mat_point_orange)
+
+        base_scale = random.uniform(0.85, 1.35)
+        obj.scale = (base_scale, base_scale, base_scale)
+
+        # 用当前对象位置当作半径基础
+        radius = math.sqrt(obj.location.x ** 2 + obj.location.y ** 2)
+        if radius < 1:
+            radius = 24 + random.uniform(-4, 4)
+
+        start_angle = math.atan2(obj.location.y, obj.location.x)
+
+        for frame in range(FRAME_START, FRAME_END + 1, KEY_STEP):
+            t = (frame - FRAME_START) / (FRAME_END - FRAME_START)
+
+            angle = start_angle + t * math.tau * POINT_FLOW_SPEED
+            wave = math.sin(t * math.tau * 5 + i * 0.35) * POINT_WAVE_HEIGHT
+
+            obj.location = (
+                math.cos(angle) * radius,
+                math.sin(angle) * radius,
+                wave + 0.4
+            )
+
+            obj.rotation_euler = (
+                math.sin(t * math.tau * 2 + i) * 0.35,
+                math.cos(t * math.tau * 2 + i) * 0.35,
+                angle
+            )
+
+            obj.keyframe_insert(data_path="location", frame=frame)
+            obj.keyframe_insert(data_path="rotation_euler", frame=frame)
+            obj.keyframe_insert(data_path="scale", frame=frame)
+
+    print("Point-cloud animation sped up and materials updated.")
+else:
+    print("Warning: flow collection not found:", FLOW_COLLECTION_NAME)
+
+# =========================
+# Linear interpolation
+# =========================
+for obj in bpy.context.scene.objects:
+    if obj.animation_data and obj.animation_data.action:
+        action = obj.animation_data.action
+        if hasattr(action, "fcurves"):
+            for fc in action.fcurves:
+                for kp in fc.keyframe_points:
+                    kp.interpolation = "SINE"
+
+# =========================
+# Scene render settings
+# =========================
+bpy.context.scene.frame_start = FRAME_START
+bpy.context.scene.frame_end = FRAME_END
+bpy.context.scene.render.fps = 24
+
+# better viewport/render mood
+bpy.context.scene.world.color = (0.005, 0.006, 0.008)
+
+print("DONE: frame wave animation + faster liquid point-cloud animation.")

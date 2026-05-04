@@ -1,0 +1,90 @@
+import bpy
+import random
+import math
+from mathutils import Vector
+
+# =========================
+# Settings
+# =========================
+GH_OBJECT_NAME = "Rhino2"
+FRAGMENT_COLLECTION_NAME = "street_pointcloud_fragments"
+
+POSITION_SCALE = 1.0
+FRAGMENT_SCALE_MIN = 0.6
+FRAGMENT_SCALE_MAX = 1.6
+HEIGHT_RANDOM = 0.0
+
+# =========================
+# Get GH coordinate object
+# =========================
+gh_obj = bpy.data.objects.get(GH_OBJECT_NAME)
+if gh_obj is None:
+    raise Exception(f"Cannot find GH object named {GH_OBJECT_NAME}")
+
+if gh_obj.type != "MESH":
+    raise Exception(f"{GH_OBJECT_NAME} is not a mesh object")
+
+# collect world-space vertices from GH object
+coords = []
+for v in gh_obj.data.vertices:
+    p = gh_obj.matrix_world @ v.co
+    coords.append(Vector((p.x * POSITION_SCALE, p.y * POSITION_SCALE, p.z * POSITION_SCALE)))
+
+# remove duplicated / near duplicated coordinates
+clean_coords = []
+seen = set()
+for p in coords:
+    key = (round(p.x, 2), round(p.y, 2), round(p.z, 2))
+    if key not in seen:
+        seen.add(key)
+        clean_coords.append(p)
+
+coords = clean_coords
+print("GH coordinate count:", len(coords))
+
+# =========================
+# Get pointcloud fragments
+# =========================
+col = bpy.data.collections.get(FRAGMENT_COLLECTION_NAME)
+if col is None:
+    raise Exception(f"Cannot find collection {FRAGMENT_COLLECTION_NAME}")
+
+fragments = [obj for obj in col.objects if obj.name.startswith("pc_fragment_")]
+print("Fragment count:", len(fragments))
+
+if len(coords) == 0 or len(fragments) == 0:
+    raise Exception("No coordinates or no fragments found.")
+
+# =========================
+# Reposition fragments
+# =========================
+random.shuffle(coords)
+
+for i, obj in enumerate(fragments):
+    p = coords[i % len(coords)]
+
+    obj.location = (
+        p.x,
+        p.y,
+        p.z + random.uniform(0, HEIGHT_RANDOM)
+    )
+
+    # rotate to face courtyard center
+    direction = Vector((0, 0, 0)) - Vector((p.x, p.y, 0))
+    angle = math.atan2(direction.y, direction.x)
+    obj.rotation_euler = (
+        random.uniform(-0.08, 0.08),
+        random.uniform(-0.08, 0.08),
+        angle + random.uniform(-0.35, 0.35)
+    )
+
+    s = random.uniform(FRAGMENT_SCALE_MIN, FRAGMENT_SCALE_MAX)
+    obj.scale = (s, s, s)
+
+# hide original street scan object if selected/source object exists
+for obj in bpy.context.scene.objects:
+    if obj.name == "Material_25_002":
+        obj.hide_viewport = True
+        obj.hide_render = True
+
+print("DONE: pointcloud fragments placed onto GH courtyard coordinates.")

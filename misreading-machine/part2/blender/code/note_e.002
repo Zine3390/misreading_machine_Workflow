@@ -1,0 +1,17 @@
+import bpy
+import random
+
+mat = bpy.data.materials.new("Readable_PointCloud_Material")
+mat.diffuse_color = (0.85, 0.95, 1.0, 1)
+
+for obj in bpy.context.scene.objects:
+    if obj.name.startswith("pc_fragment_"):
+        obj.data.materials.clear()
+        obj.data.materials.append(mat)
+        obj.show_in_front = True
+
+        # 让点在视图里更明显
+        obj.display_type = 'WIRE'
+        obj.color = (0.85, 0.95, 1.0, 1)
+
+print("Point cloud material updated.")

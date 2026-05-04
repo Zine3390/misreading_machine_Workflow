@@ -1,0 +1,102 @@
+import bpy
+import math
+
+# delete old custom lights
+for obj in list(bpy.context.scene.objects):
+    if obj.name.startswith("MISREAD_LIGHT_"):
+        bpy.data.objects.remove(obj, do_unlink=True)
+
+# world background
+bpy.context.scene.world.color = (0.005, 0.007, 0.01)
+
+# render settings
+bpy.context.scene.render.engine = "BLENDER_EEVEE_NEXT" if "BLENDER_EEVEE_NEXT" in [i.identifier for i in bpy.types.RenderSettings.bl_rna.properties["engine"].enum_items] else "BLENDER_EEVEE"
+bpy.context.scene.eevee.taa_render_samples = 96
+bpy.context.scene.eevee.taa_samples = 32
+
+# helper
+def add_light(name, type_, loc, energy, color, size=5):
+    bpy.ops.object.light_add(type=type_, location=loc)
+    light = bpy.context.object
+    light.name = name
+    light.data.energy = energy
+    light.data.color = color
+    if hasattr(light.data, "size"):
+        light.data.size = size
+    if hasattr(light.data, "shadow_soft_size"):
+        light.data.shadow_soft_size = size
+    return light
+
+# main soft overhead light
+add_light(
+    "MISREAD_LIGHT_soft_top",
+    "AREA",
+    (0, 0, 18),
+    700,
+    (0.55, 0.75, 1.0),
+    size=22
+)
+
+# central glow, like machine-reading core
+add_light(
+    "MISREAD_LIGHT_core_cyan",
+    "POINT",
+    (0, 0, 4),
+    450,
+    (0.2, 0.9, 1.0),
+    size=8
+)
+
+# warm contrast from one side
+add_light(
+    "MISREAD_LIGHT_warm_side",
+    "AREA",
+    (-18, -14, 8),
+    450,
+    (1.0, 0.45, 0.18),
+    size=14
+)
+
+# cold rim light from opposite side
+add_light(
+    "MISREAD_LIGHT_blue_rim",
+    "AREA",
+    (18, 16, 10),
+    600,
+    (0.25, 0.55, 1.0),
+    size=16
+)
+
+# small ring lights around courtyard
+for i in range(8):
+    a = i / 8 * math.tau
+    r = 22
+    x = math.cos(a) * r
+    y = math.sin(a) * r
+    z = 4 + (i % 2) * 2
+    color = (0.1, 0.85, 1.0) if i % 2 == 0 else (1.0, 0.35, 0.12)
+    add_light(
+        f"MISREAD_LIGHT_ring_{i:02d}",
+        "POINT",
+        (x, y, z),
+        90,
+        color,
+        size=5
+    )
+
+# add a subtle dark floor if absent
+if not bpy.data.objects.get("MISREAD_dark_floor"):
+    bpy.ops.mesh.primitive_cylinder_add(vertices=128, radius=30, depth=0.08, location=(0,0,-0.08))
+    floor = bpy.context.object
+    floor.name = "MISREAD_dark_floor"
+    mat = bpy.data.materials.new("MISREAD_matte_black_floor")
+    mat.diffuse_color = (0.01, 0.012, 0.014, 1)
+    floor.data.materials.append(mat)
+
+# viewport color management
+bpy.context.scene.view_settings.view_transform = "Filmic"
+bpy.context.scene.view_settings.look = "Medium High Contrast"
+bpy.context.scene.view_settings.exposure = -0.2
+bpy.context.scene.view_settings.gamma = 1.0
+
+print("DONE: lighting setup created.")

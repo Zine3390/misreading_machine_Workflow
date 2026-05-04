@@ -1,0 +1,88 @@
+import bpy
+
+# =========================
+# Settings
+# =========================
+SOURCE_OBJECT_NAME = "Rhino2"
+FRAME_OBJECT_NAME = "Rhino2_wireframe_frame"
+
+FRAME_THICKNESS = 0.08   # 框架粗细，可调：0.04-0.15
+FRAME_RESOLUTION = 3     # 圆滑度，越高越圆
+HIDE_ORIGINAL = True
+
+# =========================
+# Get source
+# =========================
+src = bpy.data.objects.get(SOURCE_OBJECT_NAME)
+
+if src is None:
+    raise Exception(f"Cannot find object: {SOURCE_OBJECT_NAME}")
+
+if src.type != "MESH":
+    raise Exception(f"{SOURCE_OBJECT_NAME} is not a mesh.")
+
+# 删除旧框架
+old = bpy.data.objects.get(FRAME_OBJECT_NAME)
+if old:
+    bpy.data.objects.remove(old, do_unlink=True)
+
+# =========================
+# Duplicate mesh
+# =========================
+mesh = src.data.copy()
+frame_obj = bpy.data.objects.new(FRAME_OBJECT_NAME, mesh)
+bpy.context.collection.objects.link(frame_obj)
+
+frame_obj.matrix_world = src.matrix_world.copy()
+
+# =========================
+# Remove all faces, keep edges
+# =========================
+import bmesh
+
+bm = bmesh.new()
+bm.from_mesh(mesh)
+
+# 删除所有面，只保留边
+faces = list(bm.faces)
+bmesh.ops.delete(bm, geom=faces, context="FACES_ONLY")
+
+bm.to_mesh(mesh)
+bm.free()
+mesh.update()
+
+# =========================
+# Convert edges to curve with thickness
+# =========================
+bpy.context.view_layer.objects.active = frame_obj
+frame_obj.select_set(True)
+
+bpy.ops.object.convert(target="CURVE")
+
+curve_obj = bpy.context.object
+curve_obj.name = FRAME_OBJECT_NAME
+
+curve_obj.data.dimensions = "3D"
+curve_obj.data.resolution_u = FRAME_RESOLUTION
+curve_obj.data.bevel_depth = FRAME_THICKNESS
+curve_obj.data.bevel_resolution = FRAME_RESOLUTION
+curve_obj.data.fill_mode = "FULL"
+curve_obj.data.use_fill_caps = True
+
+# =========================
+# Material
+# =========================
+mat = bpy.data.materials.new("Rhino2_Frame_Dark_Metal")
+mat.diffuse_color = (0.08, 0.08, 0.08, 1)
+
+curve_obj.data.materials.append(mat)
+
+# =========================
+# Hide original
+# =========================
+if HIDE_ORIGINAL:
+    src.hide_viewport = True
+    src.hide_render = True
+
+print("DONE: Rhino2 converted into solid rectangular frame.")
+print("Frame thickness:", FRAME_THICKNESS)

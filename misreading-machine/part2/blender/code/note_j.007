@@ -1,0 +1,122 @@
+import bpy
+import math
+from mathutils import Vector
+
+# =========================
+# Camera setup
+# =========================
+# delete old target if exists
+old_target = bpy.data.objects.get("MISREAD_camera_target")
+if old_target:
+    bpy.data.objects.remove(old_target, do_unlink=True)
+
+# create target at courtyard center
+bpy.ops.object.empty_add(type="PLAIN_AXES", location=(0, 0, 2.8))
+target = bpy.context.object
+target.name = "MISREAD_camera_target"
+
+# create / reuse camera
+cam = bpy.data.objects.get("MISREAD_main_camera")
+if cam is None:
+    bpy.ops.object.camera_add()
+    cam = bpy.context.object
+    cam.name = "MISREAD_main_camera"
+
+# camera position: 斜上方俯视，适合看环形庭院
+cam.location = (24, -34, 20)
+cam.rotation_euler = (math.radians(62), 0, math.radians(36))
+
+# make camera look at target
+direction = target.location - cam.location
+cam.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
+
+cam.data.lens = 28
+cam.data.sensor_width = 32
+cam.data.dof.use_dof = True
+cam.data.dof.focus_object = target
+cam.data.dof.aperture_fstop = 5.6
+
+bpy.context.scene.camera = cam
+
+# =========================
+# Render settings
+# =========================
+scene = bpy.context.scene
+
+# EEVEE
+try:
+    scene.render.engine = "BLENDER_EEVEE_NEXT"
+except:
+    scene.render.engine = "BLENDER_EEVEE"
+
+# resolution
+scene.render.resolution_x = 1920
+scene.render.resolution_y = 1080
+scene.render.fps = 24
+
+# color management
+scene.view_settings.view_transform = "Filmic"
+scene.view_settings.look = "Medium High Contrast"
+scene.view_settings.exposure = -0.15
+scene.view_settings.gamma = 1.0
+
+# world
+scene.world.color = (0.004, 0.006, 0.01)
+
+# =========================
+# Eevee glow / bloom / ambient
+# =========================
+if hasattr(scene, "eevee"):
+    eevee = scene.eevee
+
+    # bloom / glow
+    if hasattr(eevee, "use_bloom"):
+        eevee.use_bloom = True
+        eevee.bloom_threshold = 0.25
+        eevee.bloom_intensity = 0.18
+        eevee.bloom_radius = 6.5
+        eevee.bloom_color = (0.55, 0.85, 1.0)
+
+    # ambient occlusion
+    if hasattr(eevee, "use_gtao"):
+        eevee.use_gtao = True
+        eevee.gtao_distance = 4
+        eevee.gtao_factor = 1.5
+
+    # shadows / samples
+    if hasattr(eevee, "taa_render_samples"):
+        eevee.taa_render_samples = 128
+    if hasattr(eevee, "taa_samples"):
+        eevee.taa_samples = 64
+
+# =========================
+# Add subtle volumetric fog cube
+# =========================
+old_fog = bpy.data.objects.get("MISREAD_soft_fog_volume")
+if old_fog:
+    bpy.data.objects.remove(old_fog, do_unlink=True)
+
+bpy.ops.mesh.primitive_cube_add(size=70, location=(0, 0, 8))
+fog = bpy.context.object
+fog.name = "MISREAD_soft_fog_volume"
+fog.display_type = "WIRE"
+
+fog_mat = bpy.data.materials.new("MISREAD_soft_blue_fog")
+fog_mat.use_nodes = True
+nodes = fog_mat.node_tree.nodes
+for n in nodes:
+    nodes.remove(n)
+
+output = nodes.new("ShaderNodeOutputMaterial")
+volume = nodes.new("ShaderNodeVolumePrincipled")
+volume.inputs["Color"].default_value = (0.12, 0.28, 0.45, 1)
+volume.inputs["Density"].default_value = 0.015
+
+fog_mat.node_tree.links.new(volume.outputs["Volume"], output.inputs["Volume"])
+fog.data.materials.append(fog_mat)
+
+# =========================
+# Add camera marker path preview curve
+# =========================
+print("DONE: camera + glow + fog render settings created.")
+print("Camera: MISREAD_main_camera")

@@ -1,0 +1,55 @@
+import bpy
+
+# 切换到 Cycles
+bpy.context.scene.render.engine = "CYCLES"
+bpy.context.scene.cycles.samples = 128
+bpy.context.scene.cycles.use_denoising = True
+
+# 创建自发光材质
+def make_emission_material(name, color, strength):
+    mat = bpy.data.materials.new(name)
+    mat.use_nodes = True
+
+    nodes = mat.node_tree.nodes
+    nodes.clear()
+
+    emission = nodes.new("ShaderNodeEmission")
+    emission.inputs["Color"].default_value = color
+    emission.inputs["Strength"].default_value = strength
+
+    output = nodes.new("ShaderNodeOutputMaterial")
+    mat.node_tree.links.new(emission.outputs["Emission"], output.inputs["Surface"])
+
+    return mat
+
+mat_cyan = make_emission_material(
+    "POINT_EMISSION_CYAN",
+    (0.15, 0.9, 1.0, 1),
+    6.0
+)
+
+mat_orange = make_emission_material(
+    "POINT_EMISSION_ORANGE",
+    (1.0, 0.45, 0.1, 1),
+    4.5
+)
+
+mat_blue = make_emission_material(
+    "POINT_EMISSION_BLUE",
+    (0.2, 0.45, 1.0, 1),
+    5.0
+)
+
+# 给所有流动点云赋自发光材质
+for i, obj in enumerate(bpy.context.scene.objects):
+    if obj.name.startswith("flow_cloud_"):
+        obj.data.materials.clear()
+
+        if i % 7 == 0:
+            obj.data.materials.append(mat_orange)
+        elif i % 3 == 0:
+            obj.data.materials.append(mat_blue)
+        else:
+            obj.data.materials.append(mat_cyan)
+
+print("DONE: Flow particles now use Cycles emission materials.")
